@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from Bio import SeqIO
 from PIL import Image, ImageDraw, ImageFont
@@ -8,19 +9,43 @@ with open('pseud_db.pickled', 'rb') as filein:
 
 def search(query, pseud_db):
     '''
-    Returns a DataFrame of all pseudogene families that contain
-    the query string in the gene name or description
+    Returns a DataFrame of all pseudogene families that contain the query in
+     the gene name or description (or top BLAST hits for sequence queries)
+    query: string
+    pseud_db: pd.DataFrame
     '''
-    matches = []      # list of indices that contain a match
-    for i in range(len(pseud_db)):
-        row = pseud_db.loc[i]
-        if query in row['gene'] or query in row['description']:
-            matches.append(i)
-    result = pseud_db.iloc[matches]
-    return list(dict.fromkeys(result['family']))
+    if query.startswith('-file '):
+        filename = query.split(' ')[1]
+        os.system('blastn -db pseudogenes_blastdb/pseudogenes -query %s \
+            -out blasted.tsv -outfmt 6' % filename)
+        os.system(
+            "sed -i '1s/^/qseqid\tsseqid\tpident\tlength\tmismatch\tgapopen\
+\tqstart\tqend\tsstart\tsend\tevalue\tbitscore\\n/' blasted.tsv")
+        results = pd.read_csv('blasted.tsv', sep='\t')['sseqid']
+        results = list(map(lambda x: x.split('-')[1], results))
+        families = []
+        for id in results:
+            df = pseud_db[pseud_db['gene'] == id]
+            if len(df) > 0: 
+                families.append(list(df['family'])[0])
+        os.system("rm blasted.tsv")
+        return list(dict.fromkeys(families))
+    else:
+        matches = []      # list of indices that contain a match
+        for i in range(len(pseud_db)):
+            row = pseud_db.loc[i]
+            if query in row['gene'] or query in row['description']:
+                matches.append(i)
+        result = pseud_db.iloc[matches]
+        return list(dict.fromkeys(result['family']))
 
-# draw chromosomes
-def chrom_map(features, original=None): # list of SeqFeature objects, SeqFeature
+def chrom_map(features, original):
+    '''
+    Returns a PIL image object representing a chromosomal map of all
+     pseudogene locations
+    features: list of Bio.SeqFeature
+    original: Bio.SeqFeature or None
+    '''
     chrom_lens = [2489, 2421, 1982, 1902, 1815, 1708, 1593, 1451, 
                   1383, 1337, 1350, 1332, 1143, 1070, 1019, 903, 
                   832, 803, 586, 644, 467, 508, 1560, 572]
@@ -33,7 +58,7 @@ def chrom_map(features, original=None): # list of SeqFeature objects, SeqFeature
     for ft in features:
         chr = int(ft.qualifiers['from'][0].split('.')[0][-2:]) - 1
         chromosomes[chr].append(ft)
-    # draw all chroms
+    # draw all chromosomes
     ystart = 70
     for i in range(24):
         draw.rectangle([150, ystart, 150+chrom_lens[i], ystart+50], 
@@ -59,7 +84,8 @@ def chrom_map(features, original=None): # list of SeqFeature objects, SeqFeature
         ystart += 140
     if original:  # if an original gene has been specified
         chr = int(original.qualifiers['from'][0].split('.')[0][-2:]) - 1
-        pos = int(round((original.location.start + original.location.end) / 200000))
+        pos = int(round(
+            (original.location.start + original.location.end) / 200000))
         ystart = 70 + (chr*140)
         if original.location.strand < 0: ystart += 50 # negative sense 
         draw.rectangle([150+(pos-4), ystart, 150+(pos+4), ystart+50], 
@@ -67,6 +93,11 @@ def chrom_map(features, original=None): # list of SeqFeature objects, SeqFeature
     return im
 
 def get_info(features, original):
+    '''
+    Returns a DataFrame containing information about all pseudogenes provided
+    features: list of Bio.SeqFeature
+    original: Bio.SeqFeature or None
+    '''
     d = {'gene':[], 'description':[], 'source':[], 'location':[],
          'biotype':[]}
     all_entries = list(features)
@@ -82,29 +113,37 @@ def get_info(features, original):
     return df
 
 def get_fasta(family_df, orig_feature):
+    '''
+    Returns all FASTA sequences for the given pseudogene family
+    family_df: pd.DataFrame
+    orig_feature: Bio.SeqFeature or None
+    '''
+    fam_seqs = []
     fam_ids = list(map(lambda x: 
                 family_df.loc[x]['pseud_feature'].qualifiers['from'][0] + \
                 '-' + family_df.loc[x]['gene'], family_df.index))
-    orig_id = orig_feature.qualifiers['from'][0] + '-' + \
-             orig_feature.qualifiers['gene'][0] 
-    fam_seqs = []
     seqs = SeqIO.parse('all_pseudogenes.fa', 'fasta')
     for seq in seqs:
         if seq.id in fam_ids:
             fam_seqs.append(seq)
         if len(fam_seqs) == len(fam_ids):
             break
-    seqs = SeqIO.parse('all_genes.fa', 'fasta')
-    for seq in seqs:
-        if seq.id == orig_id:
-            fam_seqs = [seq] + fam_seqs
-            break
+    if orig_feature:
+        orig_id = orig_feature.qualifiers['from'][0] + '-' + \
+                orig_feature.qualifiers['gene'][0] 
+        seqs = SeqIO.parse('all_genes.fa', 'fasta')
+        for seq in seqs:
+            if seq.id == orig_id:
+                fam_seqs = [seq] + fam_seqs
+                break
     return fam_seqs
 
-
 def main():
-    query = input('Search for a pseudogene family by gene name (ex. DDX11L1)\
- or description (ex. helicase).\nQuery: ')
+    '''
+    Executes the main program
+    '''
+    query = input('Search for a pseudogene family by gene name (ex. DDX11L1),\
+ description (ex. helicase), or FASTA sequence (ex. -file gene.fa).\nQuery: ')
     results = search(query, pseud_db)
     if len(results) == 0:
         print('Sorry, no matches found.')
@@ -125,7 +164,7 @@ def main():
             pseudogenes = family_df['pseud_feature']
             original = list(family_df['orig_feature'])[0]
             print('Selection:', family)
-            print(' - %i pseudogenes found' % len(pseudogenes))
+            print(' - %i pseudogene(s) found' % len(pseudogenes))
             if original:
                 print(' - Original gene found')
             else:
@@ -150,7 +189,7 @@ Select actions to perform (ex. mpf) or q to return: ')
             if 'i' in options:
                 print('Saving pseudogene information...')
                 output = get_info(pseudogenes, original)
-                output.to_csv(family+' info.txt', sep='\t', index=False)
+                output.to_csv(family+' info.tsv', sep='\t', index=False)
             if 'f' in options:
                 print('Saving FASTA sequences...')
                 SeqIO.write(get_fasta(family_df, original), 
@@ -158,6 +197,9 @@ Select actions to perform (ex. mpf) or q to return: ')
 
 if __name__ == "__main__":
     main()
+
+    #query = '-file krt18p.txt'
+    #search(query, pseud_db)
 
     # For testing:
     # idx = 6
@@ -167,7 +209,6 @@ if __name__ == "__main__":
     # family_df = pseud_db[pseud_db['family'] == fam[idx]]
     # featurelist = family_df['pseud_feature']
     # origfeature = list(family_df['orig_feature'])[0]
-
 
     #im = chrom_map(featurelist, origfeature)
     #im.save('test chrom map.png', quality=100)
