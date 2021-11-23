@@ -6,10 +6,11 @@ font = ImageFont.truetype("OpenSans-Regular.ttf", 60)
 import pickle
 with open('pseud_db.pickled', 'rb') as filein:
     pseud_db = pickle.load(filein)
+megapath = '/mnt/c/Program\\ Files/MEGA-X/megacc.exe'
 
 def search(query, pseud_db):
     '''
-    Returns a DataFrame of all pseudogene families that contain the query in
+    Returns a DataFrame of all pseudogene families that contain the query in\
      the gene name or description (or top BLAST hits for sequence queries)
     query: string
     pseud_db: pd.DataFrame
@@ -41,7 +42,7 @@ def search(query, pseud_db):
 
 def chrom_map(features, original):
     '''
-    Returns a PIL image object representing a chromosomal map of all
+    Returns a PIL image object representing a chromosomal map of all\
      pseudogene locations
     features: list of Bio.SeqFeature
     original: Bio.SeqFeature or None
@@ -91,6 +92,15 @@ def chrom_map(features, original):
         draw.rectangle([150+(pos-4), ystart, 150+(pos+4), ystart+50], 
                     outline=(0,0,0), fill=(0,255,0))
     return im
+
+def get_phylo(family):
+    '''
+    Executes shell commands to align sequences and construct phylogeny\
+     using MEGA X
+    family: string
+    '''
+    os.system(megapath+' -a muscle_align.mao -d "'+family+' sequences.fa" -o "'+family+'"')
+    os.system(megapath+' -a ML_phylo.mao -d "'+family+'.meg" -o "'+family+'"')
 
 def get_info(features, original):
     '''
@@ -190,32 +200,13 @@ Select actions to perform (ex. mpf) or q to return: ')
                 print('Saving pseudogene information...')
                 output = get_info(pseudogenes, original)
                 output.to_csv(family+' info.tsv', sep='\t', index=False)
-            if 'f' in options:
+            if 'f' in options or 'p' in options:
                 print('Saving FASTA sequences...')
                 SeqIO.write(get_fasta(family_df, original), 
                             family+' sequences.fa', 'fasta')
+            if 'p' in options:
+                get_phylo(family)
+
 
 if __name__ == "__main__":
     main()
-
-    #query = '-file krt18p.txt'
-    #search(query, pseud_db)
-
-    # For testing:
-    # idx = 6
-    # fam = ['MT-CO1', 'RNA, 5S ribosomal', 'peptidylprolyl isomerase A',
-    #     'keratin 8', 'RN7SK', 'RNA binding motif protein 22', 'elongin C']
-
-    # family_df = pseud_db[pseud_db['family'] == fam[idx]]
-    # featurelist = family_df['pseud_feature']
-    # origfeature = list(family_df['orig_feature'])[0]
-
-    #im = chrom_map(featurelist, origfeature)
-    #im.save('test chrom map.png', quality=100)
-
-    #SeqIO.write(get_fasta(family_df, origfeature), 'famoseqs.fa', 'fasta')
-
-    #tbl = save_info(featurelist, origfeature)
-    #tbl.to_csv('fileo.tbl', sep='\t', index=False)
-
-
